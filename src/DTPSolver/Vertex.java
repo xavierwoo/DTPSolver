@@ -4,9 +4,11 @@ import java.util.Objects;
 
 public class Vertex implements Comparable{
     final int index;
-    int degree_to_X_graph = 0;
-    boolean is_in_X_graph = false;
+    int degree_to_X = 0;
+    boolean is_in_X = false;
     boolean is_cut = false;
+
+    int tabu_iter = 0;
 
     //used for determining cutting point
     boolean is_visited = false;
