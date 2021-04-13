@@ -4,6 +4,7 @@ import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
 import java.util.*;
+import java.util.stream.Collectors;
 
 
 public class DTPSolver {
@@ -17,12 +18,18 @@ public class DTPSolver {
 
     int iter_count = 0;
     long start_time;
+    double time_limit = 1000;
 
     Map<Integer, Set<Solution>> solutionPools = new TreeMap<>();
+    Map<Integer, Integer> same_sol_again_count = new TreeMap<>();
     Solution currBestSol;
     final int TABU_BASE = 10;
-    final int TABU_VAR = 10;
-    final int MAX_FAIL_COUNT = 100;
+    final int TABU_VAR = 50;
+    final int MAX_FAIL_COUNT = 500;
+    final int SOLVE_OFFSET = 2;
+    final double PERTURB_STR_RATIO_MIN = 0.3;
+    final double PERTURB_STR_RATIO_MAX = 0.5;
+    final int PERTURB_TIMES_MAX = 3;
 
     public DTPSolver(String instance, int seed) throws IOException {
         random = new Random(seed);
@@ -143,9 +150,12 @@ public class DTPSolver {
             }
             System.out.println("Sampling K=" + X.size());
             boolean res = find_any_feasible_tree();
+            if(!res)break;
+
             var solSet = new TreeSet<Solution>();
             solSet.add(currBestSol);
             solutionPools.put(X.size(), solSet);
+            same_sol_again_count.put(X.size(), 0);
             System.out.print("\tFound solution for K=" + X.size()
                         + ", not_dominated=" + currBestSol.not_dominated_count);
             if(currBestSol.tree != null){
@@ -153,9 +163,11 @@ public class DTPSolver {
             }else{
                 System.out.println();
             }
-            if(!res)break;
+
         }
     }
+
+
 
     private Solution get_best_sol_from_pool(){
         double best_tree_weight = Double.MAX_VALUE;
@@ -183,15 +195,179 @@ public class DTPSolver {
         return bestSol;
     }
 
+    private int get_best_solution_X_size(){
+        double best_weight = Double.MAX_VALUE;
+        int best_X_size = 0;
+        for(var solSetEntry : solutionPools.entrySet()){
+            int X_size = solSetEntry.getKey();
+            var sol = solSetEntry.getValue().iterator().next();
+            if(sol.tree.tree_weight < best_weight){
+                best_weight = sol.tree.tree_weight;
+                best_X_size = X_size;
+            }
+        }
+        return best_X_size;
+    }
+
+    private Solution get_random_solution_in_pool(int X_size){
+        var solSet = solutionPools.get(X_size);
+        if(solSet == null)return null;
+//        int randi = random.nextInt(solSet.size());
+//        var iter = solSet.iterator();
+//        Solution sol = iter.next();
+//        for(int i=0; i<randi; ++i){
+//            sol = iter.next();
+//        }
+        return get_random_item_in_set(solSet);
+    }
+
+    private <T> T get_random_item_in_set(Set<T> set){
+        int randi = random.nextInt(set.size());
+        var iter = set.iterator();
+        T item = iter.next();
+        for(int i=0; i < randi; ++i){
+            item = iter.next();
+        }
+        return item;
+    }
+
+    private void calc_plus_minu_set(){
+        for(Vertex v : graph.vertices){
+            v.degree_to_X = 0;
+            v.tabu_iter = 0;
+            v.is_in_X = X.contains(v);
+            for(Edge e : graph.edge_list[v.index]){
+                Vertex u = e.getOtherEdgeEnd(v);
+                if(X.contains(u)){
+                    ++v.degree_to_X;
+                }
+            }
+            if(!v.is_in_X) {
+                if (v.degree_to_X > 0) {
+                    X_plus.add(v);
+                } else {
+                    X_minu.add(v);
+                }
+            }
+        }
+    }
+
+    private void rebuilt_curr_sol(Solution sol){
+        X.clear();
+        X.addAll(sol.dominating_set);
+        X_plus.clear();
+        X_minu.clear();
+        calc_plus_minu_set();
+        tree = sol.tree;
+    }
+
+    private void gen_random_configuration(int X_size){
+        X.clear();
+        X_plus.clear();
+        X_minu.clear();
+        int randi = random.nextInt(graph.vertices.length);
+        X.add(graph.vertices[randi]);
+
+        while(X.size() < X_size){
+            var v_in_X = get_random_item_in_set(X);
+            for(Edge e : graph.edge_list[v_in_X.index]){
+                Vertex u = e.getOtherEdgeEnd(v_in_X);
+                if(!X.contains(u)){
+                    X.add(u);
+                    break;
+                }
+            }
+        }
+        calc_plus_minu_set();
+        if(X_minu.isEmpty()){
+            tree = calc_spanning_tree(collect_edges_set_in_X());
+        }else{
+            tree = null;
+        }
+    }
+
     public void solve() {
         init();
         sampling();
-        Solution bestSol = get_best_sol_from_pool();
+        Solution bestSol;
+
+        while((System.currentTimeMillis() - start_time)/1000.0 < time_limit){
+            int best_X_size = get_best_solution_X_size();
+
+            for(int X_size=best_X_size + SOLVE_OFFSET; X_size>=best_X_size-SOLVE_OFFSET; --X_size) {
+                if(!solutionPools.containsKey(X_size+1)){
+                    System.out.println("Skip X_size="+X_size);
+                    continue;
+                }
+                System.out.println("Try X_size="+X_size);
+                Solution sol = get_random_solution_in_pool(X_size);
+
+                if(sol == null){
+                    gen_random_configuration(X_size);
+                }else {
+                    rebuilt_curr_sol(sol);
+
+                }
+                check_configuration();
+                local_search(false);
+
+                if(currBestSol.not_dominated_count > 0){
+                    System.out.println("Failed for X_size="+X_size);
+                    continue;
+                }
+                System.out.println("Best res for X_size="+X_size + ": tree_w=" + currBestSol.tree.tree_weight);
+//                int cmp = compare_sol(sol, currBestSol);
+//                if(cmp > 0){
+//                    var solSet = solutionPools.get(X_size);
+//                    if(solSet == null){
+//                        solSet = new TreeSet<>();
+//                        solSet.add(currBestSol);
+//                        solutionPools.put(X_size, solSet);
+//                        same_sol_again_count.put(X_size, 0);
+//                    }else {
+//                        solSet.clear();
+//                        solSet.add(currBestSol);
+//                    }
+//                }else if (cmp == 0){
+//                    var solSet = solutionPools.get(X_size);
+//                    if(solSet.contains(currBestSol)){
+//                        same_sol_again_count.put(X_size, same_sol_again_count.get(X_size) + 1);
+//                    }else {
+//                        solSet.add(currBestSol);
+//                    }
+//                }
+            }
+
+        }
+
+        bestSol = get_best_sol_from_pool();
         System.out.println("best tree weight:" + bestSol.tree.tree_weight
                 + ", time:" + bestSol.time);
-
     }
 
+    private Move get_random_move(){
+        Vertex iv, rv;
+        do{
+            find_cut_vertices();
+            iv = get_random_item_in_set(X_plus);
+            var rv_candidate = X.stream().filter(v->!v.is_cut).collect(Collectors.toList());
+            rv = rv_candidate.get(random.nextInt(rv_candidate.size()));
+        }while(is_infeasible_move(iv, rv));
+        return evaluate_move(iv, rv, true);
+    }
+
+    private void perturb(int strength){
+        System.out.println("\tPerturb str="+strength);
+        Solution sol = get_random_solution_in_pool(X.size());
+        rebuilt_curr_sol(sol);
+
+        for(int i=0; i<strength; ++i){
+            Move mv = get_random_move();
+            make_move(mv);
+        }
+        find_cut_vertices();
+        check_configuration();
+    }
 
     private void shrink_X() {
         find_cut_vertices();
@@ -254,7 +430,7 @@ public class DTPSolver {
         return edges;
     }
 
-    private ArrayList<Vertex> get_candidate_insert_v(){
+    private ArrayList<Vertex> get_reduced_candidate_insert_v(){
         var candidates = new ArrayList<Vertex>();
 
         for(Vertex v : X_minu){
@@ -268,6 +444,10 @@ public class DTPSolver {
         return candidates;
     }
 
+    private boolean is_infeasible_move(Vertex addInV, Vertex moveOutV){
+        return addInV.degree_to_X == 1 && graph.get_edge_weight(addInV, moveOutV) < Double.MAX_VALUE;
+    }
+
     private Move find_move(boolean is_calc_tree, ArrayList<Vertex> addInVs){
         Move bestMv = new Move(null, null, Integer.MAX_VALUE, null);
         Move bestMv_t = new Move(null, null, Integer.MAX_VALUE, null);
@@ -278,7 +458,7 @@ public class DTPSolver {
         for(Vertex addInV : addInVs){
             for(Vertex moveOutV : X){
                 if(moveOutV.is_cut)continue;
-                if(addInV.degree_to_X == 1 && graph.get_edge_weight(addInV, moveOutV) < Double.MAX_VALUE){
+                if(is_infeasible_move(addInV,moveOutV)){
                     continue;
                 }
                 Move mv = evaluate_move(addInV, moveOutV, is_calc_tree);
@@ -395,7 +575,7 @@ public class DTPSolver {
 
         currBestSol = new Solution(this);
         for(;;++iter_count){
-            Move mv = find_move(false, get_candidate_insert_v());
+            Move mv = find_move(false, get_reduced_candidate_insert_v());
             if(mv.delta >= 0 || X_minu.isEmpty()){
                 break;
             }
@@ -412,47 +592,84 @@ public class DTPSolver {
         return true;
     }
 
-//    private boolean local_search(boolean not_tabu){
-//        boolean is_descending = true;
-//        int fail_improve_count = 0;
-//        long log_time = System.currentTimeMillis();
-//        currBestSol = new Solution(this);
-//        for(;;++iter_count){
-//            Move mv = find_move();
-//            if(mv.delta > 0
-//                    || mv.delta == 0 && mv.tree == null
-//                    || X_minu.size() == 0 && mv.tree.tree_weight >= tree.tree_weight){
-//                is_descending = false;
-//                if(not_tabu)break;
-//            }
-//            make_move(mv);
-//
-//            int cmp = current_configuration_compare_sol(currBestSol);
-//            if(cmp < 0){
-//                currBestSol = new Solution(this);
-//                fail_improve_count = 0;
-//            }else if(!is_descending){
-//                fail_improve_count++;
-//            }
-//
-//            long curr_time = System.currentTimeMillis();
-//            if(curr_time - log_time > 1000) {
-//                System.out.print("\titer=" + iter_count + ", X_m_size=" + X_minu.size());
-//                if (tree != null) {
-//                    System.out.println(", tree_weight=" + tree.tree_weight);
-//                } else {
-//                    System.out.println();
-//                }
-//                log_time = curr_time;
-//            }
-//
-//            if(fail_improve_count >= MAX_FAIL_COUNT)break;
-//
-//            //check_configuration();
-//        }
-//
-//        return X_minu.size() == 0;
-//    }
+    private boolean local_search(boolean not_tabu){
+        boolean is_descending = true;
+        int fail_improve_count = 0;
+        ArrayList<Vertex> candidate_addIns;
+        long log_time = System.currentTimeMillis();
+        if(X_minu.isEmpty() && tree == null){
+            throw new Error("local search error1");
+        }
+
+        int per_str_min = (int)(X.size() * PERTURB_STR_RATIO_MIN);
+        int per_str_max = (int)(X.size() * PERTURB_STR_RATIO_MAX);
+        int per_times = 0;
+        var solSet = solutionPools.get(X.size());
+        currBestSol = solSet== null ? new Solution(this) : solSet.iterator().next();
+        for(;;++iter_count){
+            if(X_minu.isEmpty()){
+                candidate_addIns = new ArrayList<>(X_plus);
+            }else{
+                candidate_addIns = get_reduced_candidate_insert_v();
+            }
+            Move mv = find_move(true, candidate_addIns);
+            if(mv.delta > 0
+                    || mv.delta == 0 && mv.tree == null
+                    || X_minu.isEmpty() && mv.tree.tree_weight >= tree.tree_weight){
+                //is_descending = false;
+                if(not_tabu)break;
+            }
+            make_move(mv);
+            fail_improve_count++;
+            int cmp = current_configuration_compare_sol(currBestSol);
+            if(cmp < 0){
+                currBestSol = new Solution(this);
+                fail_improve_count = 0;
+                if(tree != null) {
+                    if(solSet != null) {
+                        solSet.clear();
+                    }
+                    solSet = new TreeSet<>();
+                    solutionPools.put(X.size(), solSet);
+                    solSet.add(currBestSol);
+                    same_sol_again_count.put(X.size(), 0);
+                }
+            }else if(cmp == 0){
+                var currSol = new Solution(this);
+                if(solSet != null) {
+                    if (solSet.contains(currSol)) {
+                        same_sol_again_count.put(X.size(), same_sol_again_count.get(X.size()) + 1);
+                    } else {
+                        solSet.add(currSol);
+                    }
+                }
+            }
+
+            long curr_time = System.currentTimeMillis();
+            if(curr_time - log_time > 1000) {
+                System.out.print("\titer=" + iter_count + ", X_m_size=" + X_minu.size());
+                if (tree != null) {
+                    System.out.println(", tree_w=" + tree.tree_weight + ", best_tree_w="+currBestSol.tree.tree_weight);
+                } else {
+                    System.out.println();
+                }
+                log_time = curr_time;
+            }
+
+            if(per_times >= PERTURB_TIMES_MAX)break;
+            if(fail_improve_count >= MAX_FAIL_COUNT){
+                Integer count = same_sol_again_count.get(X.size());
+                int str = count== null? per_str_max : Math.min(per_str_min + same_sol_again_count.get(X.size()), per_str_max);
+                perturb(str);
+                per_times++;
+                fail_improve_count =0;
+            }
+
+            //check_configuration();
+        }
+
+        return X_minu.size() == 0;
+    }
 
     private SpanningTree calc_spanning_tree(TreeSet<Edge> candidate_edges) {
         int[] disjoint_set = new int[graph.vertices.length];
@@ -679,6 +896,12 @@ public class DTPSolver {
                 }
             }
             return cmp;
+        }
+
+        @Override
+        public boolean equals(Object o){
+            Solution oo = (Solution) o;
+            return dominating_set.equals(oo.dominating_set);
         }
     }
 }
