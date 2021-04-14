@@ -9,7 +9,7 @@ import java.util.stream.Collectors;
 
 public class DTPSolver {
     final private Random random;
-    private Graph graph;
+    Graph graph;
 
     final Set<Vertex> X = new TreeSet<>();
     final Set<Vertex> X_plus = new TreeSet<>();
@@ -141,6 +141,7 @@ public class DTPSolver {
 
 
     private void sampling(){
+        System.out.println("Sampling...");
         for(;;){
             shrink_X();
             if(X_minu.size() == 0){
@@ -148,7 +149,6 @@ public class DTPSolver {
             }else{
                 tree = null;
             }
-            System.out.println("Sampling K=" + X.size());
             boolean res = find_any_feasible_tree();
             if(!res)break;
 
@@ -156,15 +156,10 @@ public class DTPSolver {
             solSet.add(currBestSol);
             solutionPools.put(X.size(), solSet);
             same_sol_again_count.put(X.size(), 0);
-            System.out.print("\tFound solution for K=" + X.size()
-                        + ", not_dominated=" + currBestSol.not_dominated_count);
-            if(currBestSol.tree != null){
-                System.out.println(", tree_weight=" + currBestSol.tree.tree_weight);
-            }else{
-                System.out.println();
-            }
-
         }
+        Solution sol = get_best_sol_from_pool();
+        System.out.println("Best solution from sampling. tree_w=" + sol.tree.tree_weight +
+                ", X_size=" + sol.dominating_set.size());
     }
 
 
@@ -201,7 +196,7 @@ public class DTPSolver {
         for(var solSetEntry : solutionPools.entrySet()){
             int X_size = solSetEntry.getKey();
             var sol = solSetEntry.getValue().iterator().next();
-            if(sol.tree.tree_weight < best_weight){
+            if(sol.tree != null && sol.tree.tree_weight < best_weight){
                 best_weight = sol.tree.tree_weight;
                 best_X_size = X_size;
             }
@@ -212,12 +207,6 @@ public class DTPSolver {
     private Solution get_random_solution_in_pool(int X_size){
         var solSet = solutionPools.get(X_size);
         if(solSet == null)return null;
-//        int randi = random.nextInt(solSet.size());
-//        var iter = solSet.iterator();
-//        Solution sol = iter.next();
-//        for(int i=0; i<randi; ++i){
-//            sol = iter.next();
-//        }
         return get_random_item_in_set(solSet);
     }
 
@@ -286,7 +275,7 @@ public class DTPSolver {
         }
     }
 
-    public void solve() {
+    public Solution solve() {
         init();
         sampling();
         Solution bestSol;
@@ -304,9 +293,10 @@ public class DTPSolver {
 
                 if(sol == null){
                     gen_random_configuration(X_size);
+                    currBestSol = new Solution(this);
                 }else {
                     rebuilt_curr_sol(sol);
-
+                    currBestSol = sol;
                 }
                 check_configuration();
                 local_search(false);
@@ -316,33 +306,14 @@ public class DTPSolver {
                     continue;
                 }
                 System.out.println("Best res for X_size="+X_size + ": tree_w=" + currBestSol.tree.tree_weight);
-//                int cmp = compare_sol(sol, currBestSol);
-//                if(cmp > 0){
-//                    var solSet = solutionPools.get(X_size);
-//                    if(solSet == null){
-//                        solSet = new TreeSet<>();
-//                        solSet.add(currBestSol);
-//                        solutionPools.put(X_size, solSet);
-//                        same_sol_again_count.put(X_size, 0);
-//                    }else {
-//                        solSet.clear();
-//                        solSet.add(currBestSol);
-//                    }
-//                }else if (cmp == 0){
-//                    var solSet = solutionPools.get(X_size);
-//                    if(solSet.contains(currBestSol)){
-//                        same_sol_again_count.put(X_size, same_sol_again_count.get(X_size) + 1);
-//                    }else {
-//                        solSet.add(currBestSol);
-//                    }
-//                }
             }
 
         }
 
         bestSol = get_best_sol_from_pool();
         System.out.println("best tree weight:" + bestSol.tree.tree_weight
-                + ", time:" + bestSol.time);
+                + ", X_size:" + bestSol.dominating_set.size() + ", time:" + bestSol.time);
+        return bestSol;
     }
 
     private Move get_random_move(){
@@ -552,21 +523,8 @@ public class DTPSolver {
     private int current_configuration_compare_sol(Solution sol){
         if(sol == null) return -1;
         int cmp = Integer.compare(X_minu.size(), sol.not_dominated_count);
-        if(cmp == 0 && tree != null){
+        if(cmp == 0 && tree != null && sol.tree != null){
             cmp = Double.compare(tree.tree_weight, sol.tree.tree_weight);
-        }
-        return cmp;
-    }
-
-    private int compare_sol(Solution s1, Solution s2){
-        if(s1 == null && s2 != null){
-            return 1;
-        }else if(s1 != null && s2 == null){
-            return -1;
-        }
-        int cmp = Integer.compare(s1.not_dominated_count, s2.not_dominated_count);
-        if(cmp == 0 && s1.tree != null){
-            cmp = Double.compare(s1.tree.tree_weight, s2.tree.tree_weight);
         }
         return cmp;
     }
@@ -592,10 +550,16 @@ public class DTPSolver {
         return true;
     }
 
+    private ArrayList<Vertex> prepare_candidate_addIns(){
+        if(X_minu.isEmpty()){
+            return new ArrayList<>(X_plus);
+        }else{
+            return get_reduced_candidate_insert_v();
+        }
+    }
+
     private boolean local_search(boolean not_tabu){
-        boolean is_descending = true;
         int fail_improve_count = 0;
-        ArrayList<Vertex> candidate_addIns;
         long log_time = System.currentTimeMillis();
         if(X_minu.isEmpty() && tree == null){
             throw new Error("local search error1");
@@ -605,18 +569,13 @@ public class DTPSolver {
         int per_str_max = (int)(X.size() * PERTURB_STR_RATIO_MAX);
         int per_times = 0;
         var solSet = solutionPools.get(X.size());
-        currBestSol = solSet== null ? new Solution(this) : solSet.iterator().next();
-        for(;;++iter_count){
-            if(X_minu.isEmpty()){
-                candidate_addIns = new ArrayList<>(X_plus);
-            }else{
-                candidate_addIns = get_reduced_candidate_insert_v();
-            }
+
+        for(;(System.currentTimeMillis() - start_time)/1000.0 < time_limit;++iter_count){
+            ArrayList<Vertex> candidate_addIns = prepare_candidate_addIns();
             Move mv = find_move(true, candidate_addIns);
             if(mv.delta > 0
                     || mv.delta == 0 && mv.tree == null
                     || X_minu.isEmpty() && mv.tree.tree_weight >= tree.tree_weight){
-                //is_descending = false;
                 if(not_tabu)break;
             }
             make_move(mv);
@@ -625,23 +584,21 @@ public class DTPSolver {
             if(cmp < 0){
                 currBestSol = new Solution(this);
                 fail_improve_count = 0;
-                if(tree != null) {
-                    if(solSet != null) {
-                        solSet.clear();
-                    }
-                    solSet = new TreeSet<>();
-                    solutionPools.put(X.size(), solSet);
-                    solSet.add(currBestSol);
-                    same_sol_again_count.put(X.size(), 0);
+
+                if(solSet != null) {
+                    solSet.clear();
                 }
+                solSet = new TreeSet<>();
+                solutionPools.put(X.size(), solSet);
+                solSet.add(currBestSol);
+                same_sol_again_count.put(X.size(), 0);
+
             }else if(cmp == 0){
                 var currSol = new Solution(this);
-                if(solSet != null) {
-                    if (solSet.contains(currSol)) {
-                        same_sol_again_count.put(X.size(), same_sol_again_count.get(X.size()) + 1);
-                    } else {
-                        solSet.add(currSol);
-                    }
+                if (solSet.contains(currSol)) {
+                    same_sol_again_count.put(X.size(), same_sol_again_count.get(X.size()) + 1);
+                } else {
+                    solSet.add(currSol);
                 }
             }
 
@@ -825,20 +782,10 @@ public class DTPSolver {
         dfs_X_tree(null, X.iterator().next(), visited);
     }
 
-    private void check_configuration(){
+    void check_configuration(){
         check_split();
         check_consistency();
         check_tree();
-    }
-
-    static class EdgeWeightComparator implements Comparator {
-
-        @Override
-        public int compare(Object o1, Object o2) {
-            Edge e1 = (Edge) o1;
-            Edge e2 = (Edge) o2;
-            return Double.compare(e1.weight, e2.weight);
-        }
     }
 
     public class SpanningTree {
@@ -863,45 +810,6 @@ public class DTPSolver {
             this.moveOutV = moveOutV;
             this.delta = delta;
             this.tree = tree;
-        }
-    }
-
-    public class Solution implements Comparable{
-        final Graph graph;
-        final public Set<Vertex> dominating_set;
-        final public int not_dominated_count;
-        final public SpanningTree tree;
-        final double time;
-        Solution(DTPSolver solver){
-            solver.check_configuration();
-            this.graph = solver.graph;
-            this.dominating_set = new TreeSet<>(solver.X);
-            this.tree = solver.tree;
-            not_dominated_count = solver.X_minu.size();
-            time = (System.currentTimeMillis() - solver.start_time)/1000.0;
-        }
-
-        @Override
-        public int compareTo(Object o) {
-            Solution sp = (Solution)o;
-            int cmp = Integer.compare(dominating_set.size(), sp.dominating_set.size());
-
-            if(cmp == 0) {
-                var s1Iter = dominating_set.iterator();
-                var s2Iter = sp.dominating_set.iterator();
-                while (cmp == 0 && s1Iter.hasNext()) {
-                    Vertex s1v = s1Iter.next();
-                    Vertex s2v = s2Iter.next();
-                    cmp = Double.compare(s1v.index, s2v.index);
-                }
-            }
-            return cmp;
-        }
-
-        @Override
-        public boolean equals(Object o){
-            Solution oo = (Solution) o;
-            return dominating_set.equals(oo.dominating_set);
         }
     }
 }
