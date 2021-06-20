@@ -30,6 +30,7 @@ public class DTPSolver {
     final double PERTURB_STR_RATIO_MIN = 0.3;
     final double PERTURB_STR_RATIO_MAX = 0.5;
     final int PERTURB_TIMES_MAX = 3;
+    final double CUT_RATIO = 0.05;
 
     public DTPSolver(String instance, int seed) throws IOException {
         random = new Random(seed);
@@ -162,13 +163,10 @@ public class DTPSolver {
                 ", X_size=" + sol.dominating_set.size());
     }
 
-
-
     private Solution get_best_sol_from_pool(){
         double best_tree_weight = Double.MAX_VALUE;
         Set<Solution> best_solSet = null;
         for(var solSetEntry : solutionPools.entrySet()){
-            int k = solSetEntry.getKey();
             Set<Solution> solSet = solSetEntry.getValue();
             Solution sol = solSet.iterator().next();
             if(sol.tree == null) continue;
@@ -183,10 +181,6 @@ public class DTPSolver {
         }
         var iter = best_solSet.iterator();
         Solution bestSol = iter.next();
-        int rand = random.nextInt(best_solSet.size());
-        for(int i=0; i<rand; ++i){
-            bestSol = iter.next();
-        }
         return bestSol;
     }
 
@@ -276,14 +270,20 @@ public class DTPSolver {
     }
 
     public Solution solve() {
+        int[] try_sizes = new int[SOLVE_OFFSET * 2 + 1];
         init();
         sampling();
         Solution bestSol;
 
         while((System.currentTimeMillis() - start_time)/1000.0 < time_limit){
             int best_X_size = get_best_solution_X_size();
-
-            for(int X_size=best_X_size + SOLVE_OFFSET; X_size>=best_X_size-SOLVE_OFFSET; --X_size) {
+            try_sizes[0] = best_X_size;
+            for(int i=1, pos=1; i<=SOLVE_OFFSET; i++, pos+=2){
+                try_sizes[pos] = try_sizes[0] - i;
+                try_sizes[pos+1] = try_sizes[0] + i;
+            }
+            //for(int X_size=best_X_size + SOLVE_OFFSET; X_size>=best_X_size-SOLVE_OFFSET; --X_size) {
+            for(int X_size : try_sizes){
                 if(!solutionPools.containsKey(X_size+1)){
                     System.out.println("Skip X_size="+X_size);
                     continue;
@@ -299,7 +299,7 @@ public class DTPSolver {
                     currBestSol = sol;
                 }
                 check_configuration();
-                local_search(false);
+                local_search();
 
                 if(currBestSol.not_dominated_count > 0){
                     System.out.println("Failed for X_size="+X_size);
@@ -311,7 +311,7 @@ public class DTPSolver {
         }
 
         bestSol = get_best_sol_from_pool();
-        System.out.println("best tree weight:" + bestSol.tree.tree_weight
+        System.out.println("best tree weight:" + String.format("%.2f",bestSol.tree.tree_weight)
                 + ", X_size:" + bestSol.dominating_set.size() + ", time:" + bestSol.time);
         return bestSol;
     }
@@ -397,7 +397,7 @@ public class DTPSolver {
                 edges.add(e);
             }
         }
-        edges.removeAll(graph.edge_list[moveOutV.index]);
+        graph.edge_list[moveOutV.index].forEach(edges::remove);
         return edges;
     }
 
@@ -503,15 +503,118 @@ public class DTPSolver {
             }
         }
 
-        SpanningTree tree = null;
+        SpanningTree new_tree = null;
 
         if(is_calc_tree && X_minu.size() + delta == 0){
-            tree = calc_spanning_tree(collect_edges_in_X_after_move(addInV, moveOutV));
+            if(tree == null){
+                new_tree = calc_spanning_tree(collect_edges_in_X_after_move(addInV, moveOutV));
+            }else {
+                //TODO:check if update improves
+//                new_tree = update_current_tree(addInV, moveOutV);
+                new_tree = calc_spanning_tree(collect_edges_in_X_after_move(addInV, moveOutV));
+//
+//                var test_tree = update_current_tree(addInV, moveOutV);
+//                if(Math.abs(new_tree.tree_weight - test_tree.tree_weight)> 0.001){
+//                    throw new Error("update calc spanning tree error");
+//                }
+            }
         }
 
-        return new Move(addInV, moveOutV, delta, tree);
+        return new Move(addInV, moveOutV, delta, new_tree);
     }
 
+    private SpanningTree update_current_tree(Vertex addInV, Vertex moveOutV){
+        Graph g_tree = graph.gen_new_subgraph_from_tree(tree);
+
+        update_calc_tree_add_v(X.size() + 1, g_tree, addInV);
+        return update_calc_tree_remove_v(X.size(), g_tree, addInV, moveOutV);
+    }
+
+    private SpanningTree update_calc_tree_remove_v(int x_size, Graph g_tree, Vertex addInV,Vertex moveOutV){
+
+        for(var e: graph.edge_list[moveOutV.index]){
+            var other_v = e.getOtherEdgeEnd(moveOutV);
+            if(other_v.is_in_X || other_v == addInV){
+                g_tree.remove_edge(e);
+            }
+        }
+        var curr_tree_edges = g_tree.get_all_edges_des();
+        var candidate_edges = collect_edges_in_X_after_move(addInV, moveOutV);
+        candidate_edges.removeAll(curr_tree_edges);
+
+        return update_kruskal(g_tree, curr_tree_edges, candidate_edges);
+    }
+
+    private SpanningTree update_kruskal(Graph g_tree, Set<Edge> curr_tree_edges, Set<Edge> candidate_edges){
+        int[] disjoint_set = new int[graph.vertices.length];
+        Arrays.fill(disjoint_set, -1);
+        prepare_disjoint_set(g_tree, disjoint_set);
+        kruskal_subprocess(candidate_edges, disjoint_set, curr_tree_edges);
+
+        var tree_weight = 0.0;
+        for(Edge e : curr_tree_edges){
+            tree_weight += e.weight;
+        }
+        return new SpanningTree(curr_tree_edges, tree_weight);
+    }
+
+    private void prepare_disjoint_set(Graph g_tree, int[] disjoint_set){
+        boolean[] visited = new boolean[graph.vertices.length];
+        for(Vertex v : X){
+            if(visited[v.index])continue;
+            visited[v.index] = true;
+            dfs_prepare_disjoint_set(g_tree, v, disjoint_set, visited);
+        }
+    }
+
+    private int dfs_prepare_disjoint_set(Graph g_tree, Vertex root, int[] disjoint_set, boolean[] visited){
+        int vertices_count = 1;
+        for(Edge e : g_tree.edge_list[root.index]){
+            Vertex u = e.getOtherEdgeEnd(root);
+            if(visited[u.index])continue;
+            visited[u.index] = true;
+            disjoint_set[u.index] = root.index;
+            vertices_count += dfs_prepare_disjoint_set(g_tree, u, disjoint_set, visited);
+        }
+        if(disjoint_set[root.index] == -1){
+            disjoint_set[root.index] = -vertices_count;
+        }
+        return vertices_count;
+    }
+
+    private void update_calc_tree_add_v(int x_size, Graph g_tree, Vertex addInV){
+        for(var e : graph.edge_list[addInV.index]){
+            var other_v = e.getOtherEdgeEnd(addInV);
+            if(other_v.is_in_X) {
+                g_tree.add_edge(e);
+            }
+        }
+        var edges = g_tree.get_all_edges_des();
+        int curr_edges_count = edges.size();
+
+        boolean[] visited = new boolean[graph.vertices.length];
+        for(Edge e : edges){
+            Arrays.fill(visited, false);
+            int count = DFS_subgraph_count(g_tree, e.source, e, visited);
+            if(count != x_size) continue;
+            g_tree.remove_edge(e);
+            curr_edges_count--;
+            if(curr_edges_count == x_size - 1)break;
+        }
+    }
+
+    private int DFS_subgraph_count(Graph subgraph, Vertex start, Edge except_e, boolean[] visited){
+        int count = 0;
+        for(Edge e : subgraph.edge_list[start.index]){
+            if(e == except_e) continue;
+            Vertex r = e.getOtherEdgeEnd(start);
+            if(visited[r.index]) continue;
+            visited[r.index] = true;
+            count ++;
+            count += DFS_subgraph_count(subgraph, r, except_e, visited);
+        }
+        return count;
+    }
 
     private void make_move(Move mv){
         add_vertex_to_X(mv.addInV);
@@ -558,7 +661,7 @@ public class DTPSolver {
         }
     }
 
-    private boolean local_search(boolean not_tabu){
+    private boolean local_search(){
         int fail_improve_count = 0;
         long log_time = System.currentTimeMillis();
         if(X_minu.isEmpty() && tree == null){
@@ -569,22 +672,23 @@ public class DTPSolver {
         int per_str_max = (int)(X.size() * PERTURB_STR_RATIO_MAX);
         int per_times = 0;
         var solSet = solutionPools.get(X.size());
-
+        if(solSet == null){
+            solSet = new TreeSet<>();
+            solSet.add(new Solution(this));
+            solutionPools.put(X.size(), solSet);
+            same_sol_again_count.put(X.size(), 0);
+        }
         for(;(System.currentTimeMillis() - start_time)/1000.0 < time_limit;++iter_count){
             ArrayList<Vertex> candidate_addIns = prepare_candidate_addIns();
             Move mv = find_move(true, candidate_addIns);
-            if(mv.delta > 0
-                    || mv.delta == 0 && mv.tree == null
-                    || X_minu.isEmpty() && mv.tree.tree_weight >= tree.tree_weight){
-                if(not_tabu)break;
-            }
+
             make_move(mv);
             fail_improve_count++;
             int cmp = current_configuration_compare_sol(currBestSol);
             if(cmp < 0){
                 currBestSol = new Solution(this);
                 fail_improve_count = 0;
-
+                per_times = 0;
                 if(solSet != null) {
                     solSet.clear();
                 }
@@ -603,18 +707,28 @@ public class DTPSolver {
             }
 
             long curr_time = System.currentTimeMillis();
-            if(curr_time - log_time > 1000) {
-                System.out.print("\titer=" + iter_count + ", X_m_size=" + X_minu.size());
+            if(curr_time - log_time > 5000) {
+                System.out.print("\titer=" + iter_count + ", X_size=" + X.size());
                 if (tree != null) {
-                    System.out.println(", tree_w=" + tree.tree_weight + ", best_tree_w="+currBestSol.tree.tree_weight);
+                    System.out.print(", tree_w=" + String.format("%.2f", tree.tree_weight) + ", best_tree_w="+String.format("%.2f", currBestSol.tree.tree_weight));
                 } else {
-                    System.out.println();
+                    System.out.print(", X_m_size=" + X_minu.size());
                 }
+                var bestSol = get_best_sol_from_pool();
+                System.out.println(", ever_best_tree_w="+String.format("%.2f", bestSol.tree.tree_weight));
                 log_time = curr_time;
             }
 
             if(per_times >= PERTURB_TIMES_MAX)break;
             if(fail_improve_count >= MAX_FAIL_COUNT){
+                Solution bestSol = get_best_sol_from_pool();
+                if(per_times >= PERTURB_TIMES_MAX/3
+                        && (currBestSol.tree == null
+                        ||
+                        (currBestSol.tree.tree_weight - bestSol.tree.tree_weight)/bestSol.tree.tree_weight > CUT_RATIO)){
+                    System.out.println("\tToo bad! dropped");
+                    break;
+                }
                 Integer count = same_sol_again_count.get(X.size());
                 int str = count== null? per_str_max : Math.min(per_str_min + same_sol_again_count.get(X.size()), per_str_max);
                 perturb(str);
@@ -635,6 +749,13 @@ public class DTPSolver {
         var tree_edges = new TreeSet<Edge>();
         var tree_weight = 0.0;
 
+        tree_weight = kruskal_subprocess(candidate_edges, disjoint_set, tree_edges);
+
+        return new SpanningTree(tree_edges, tree_weight);
+    }
+
+    private double kruskal_subprocess(Set<Edge> candidate_edges, int[] disjoint_set, Set<Edge> tree_edges){
+        var tree_weight = 0.0;
         for (var edge : candidate_edges) {
             int i = edge.source.index;
             while (disjoint_set[i] >= 0) i = disjoint_set[i];
@@ -652,8 +773,7 @@ public class DTPSolver {
                 }
             }
         }
-
-        return new SpanningTree(tree_edges, tree_weight);
+        return tree_weight;
     }
 
     private int depth;
@@ -788,18 +908,9 @@ public class DTPSolver {
         check_tree();
     }
 
-    public class SpanningTree {
-        final public Set<Edge> tree_edges;
-        final public double tree_weight;
-        public Set<Vertex> leaves = null;
 
-        SpanningTree(Set<Edge> edges, double weight) {
-            tree_edges = edges;
-            tree_weight = weight;
-        }
-    }
 
-    private class Move {
+    static private class Move {
         final public Vertex addInV;
         final public Vertex moveOutV;
         final public int delta;

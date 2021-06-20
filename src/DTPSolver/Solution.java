@@ -7,7 +7,7 @@ public class Solution implements Comparable{
     final Graph graph;
     final public Set<Vertex> dominating_set;
     final public int not_dominated_count;
-    final public DTPSolver.SpanningTree tree;
+    final public SpanningTree tree;
     final public double time;
     Solution(DTPSolver solver){
         solver.check_configuration();
