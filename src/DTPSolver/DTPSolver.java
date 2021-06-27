@@ -29,7 +29,7 @@ public class DTPSolver {
     final int SOLVE_OFFSET = 2;
     final double PERTURB_STR_RATIO_MIN = 0.3;
     final double PERTURB_STR_RATIO_MAX = 0.5;
-    final int PERTURB_TIMES_MAX = 3;
+    final int PERTURB_TIMES_MAX = 5;
     final double CUT_RATIO = 0.05;
 
     public DTPSolver(String instance, int seed) throws IOException {
@@ -274,7 +274,7 @@ public class DTPSolver {
         init();
         sampling();
         Solution bestSol;
-
+        int m_p_t = 1;
         while((System.currentTimeMillis() - start_time)/1000.0 < time_limit){
             int best_X_size = get_best_solution_X_size();
             try_sizes[0] = best_X_size;
@@ -283,7 +283,8 @@ public class DTPSolver {
                 try_sizes[pos+1] = try_sizes[0] + i;
             }
             //for(int X_size=best_X_size + SOLVE_OFFSET; X_size>=best_X_size-SOLVE_OFFSET; --X_size) {
-            for(int X_size : try_sizes){
+            for(int i = 0; i<try_sizes.length; ++i){
+                int X_size = try_sizes[i];
                 if(!solutionPools.containsKey(X_size+1)){
                     System.out.println("Skip X_size="+X_size);
                     continue;
@@ -299,7 +300,7 @@ public class DTPSolver {
                     currBestSol = sol;
                 }
                 check_configuration();
-                local_search();
+                local_search(i, m_p_t);
 
                 if(currBestSol.not_dominated_count > 0){
                     System.out.println("Failed for X_size="+X_size);
@@ -307,6 +308,7 @@ public class DTPSolver {
                 }
                 System.out.println("Best res for X_size="+X_size + ": tree_w=" + currBestSol.tree.tree_weight);
             }
+            m_p_t++;
 
         }
 
@@ -661,8 +663,10 @@ public class DTPSolver {
         }
     }
 
-    private boolean local_search(){
+    private boolean local_search(int phase, int m_p_t){
         int fail_improve_count = 0;
+        final int max_fail_count = phase == 0? MAX_FAIL_COUNT : MAX_FAIL_COUNT/2;
+        final int max_pert_times = Math.min(m_p_t, PERTURB_TIMES_MAX);
         long log_time = System.currentTimeMillis();
         if(X_minu.isEmpty() && tree == null){
             throw new Error("local search error1");
@@ -689,9 +693,9 @@ public class DTPSolver {
                 currBestSol = new Solution(this);
                 fail_improve_count = 0;
                 per_times = 0;
-                if(solSet != null) {
-                    solSet.clear();
-                }
+//                if(solSet != null) {
+//                    solSet.clear();
+//                }
                 solSet = new TreeSet<>();
                 solutionPools.put(X.size(), solSet);
                 solSet.add(currBestSol);
@@ -719,10 +723,10 @@ public class DTPSolver {
                 log_time = curr_time;
             }
 
-            if(per_times >= PERTURB_TIMES_MAX)break;
-            if(fail_improve_count >= MAX_FAIL_COUNT){
+            if(per_times >= max_pert_times)break;
+            if(fail_improve_count >= max_fail_count){
                 Solution bestSol = get_best_sol_from_pool();
-                if(per_times >= PERTURB_TIMES_MAX/3
+                if(per_times >= max_pert_times/3
                         && (currBestSol.tree == null
                         ||
                         (currBestSol.tree.tree_weight - bestSol.tree.tree_weight)/bestSol.tree.tree_weight > CUT_RATIO)){

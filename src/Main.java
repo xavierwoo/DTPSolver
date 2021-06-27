@@ -27,8 +27,8 @@ public class Main {
 //        instances.add("instances/Range_100/ins_400_2.txt");
 //        instances.add("instances/Range_100/ins_400_3.txt");
 //        instances.add("instances/Range_100/ins_500_1.txt");
-//        instances.add("instances/Range_100/ins_500_2.txt");
-        instances.add("instances/Range_100/ins_500_3.txt");
+        instances.add("instances/Range_100/ins_500_2.txt");
+//        instances.add("instances/Range_100/ins_500_3.txt");
 
 //        instances.add("instances/Range_125/ins_50_1.txt");
 //        instances.add("instances/Range_125/ins_50_2.txt");
