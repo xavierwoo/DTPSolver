@@ -1,8 +1,8 @@
 package DTPSolver;
 
-import java.io.BufferedReader;
-import java.io.FileReader;
-import java.io.IOException;
+import org.antlr.v4.runtime.tree.Tree;
+
+import java.io.*;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -25,12 +25,16 @@ public class DTPSolver {
     Solution currBestSol;
     final int TABU_BASE = 10;
     final int TABU_VAR = 50;
-    final int MAX_FAIL_COUNT = 500;
+    final int MAX_FAIL_COUNT = 250;
     final int SOLVE_OFFSET = 2;
     final double PERTURB_STR_RATIO_MIN = 0.3;
     final double PERTURB_STR_RATIO_MAX = 0.5;
     final int PERTURB_TIMES_MAX = 5;
     final double CUT_RATIO = 0.05;
+
+    public void setTime_limit(double time){
+        time_limit = time;
+    }
 
     public DTPSolver(String instance, int seed) throws IOException {
         random = new Random(seed);
@@ -134,7 +138,13 @@ public class DTPSolver {
         for(Vertex v : init_tree.leaves){
             remove_vertex_from_X(v);
         }
-        tree = init_tree;
+
+        var candidateEdges = new ArrayList(collect_edges_set_in_X());
+        tree = calc_spanning_tree(candidateEdges);
+        //tree = init_tree;
+        Set<Solution> solSet = new TreeSet<>();
+        solSet.add(new Solution(this));
+        solutionPools.put(X.size(), solSet);
 
         System.out.println("Init tree: nodes_num="+X.size() + ", weight="+tree.tree_weight);
     }
@@ -146,7 +156,8 @@ public class DTPSolver {
         for(;;){
             shrink_X();
             if(X_minu.size() == 0){
-                tree = calc_spanning_tree(collect_edges_set_in_X());
+                var edges = new ArrayList<>(collect_edges_set_in_X());
+                tree = calc_spanning_tree(edges);
             }else{
                 tree = null;
             }
@@ -169,7 +180,7 @@ public class DTPSolver {
         for(var solSetEntry : solutionPools.entrySet()){
             Set<Solution> solSet = solSetEntry.getValue();
             Solution sol = solSet.iterator().next();
-            if(sol.tree == null) continue;
+            if(sol.not_dominated_count > 0) continue;
             double weight = sol.tree.tree_weight;
             if( weight < best_tree_weight){
                 best_tree_weight =weight;
@@ -177,7 +188,8 @@ public class DTPSolver {
             }
         }
         if(best_solSet == null){
-            throw new Error("get best sol from pool error");
+            return null;
+            //throw new Error("get best sol from pool error");
         }
         var iter = best_solSet.iterator();
         Solution bestSol = iter.next();
@@ -185,6 +197,9 @@ public class DTPSolver {
     }
 
     private int get_best_solution_X_size(){
+        if(solutionPools.isEmpty()){
+            return -1;
+        }
         double best_weight = Double.MAX_VALUE;
         int best_X_size = 0;
         for(var solSetEntry : solutionPools.entrySet()){
@@ -263,7 +278,8 @@ public class DTPSolver {
         }
         calc_plus_minu_set();
         if(X_minu.isEmpty()){
-            tree = calc_spanning_tree(collect_edges_set_in_X());
+            var edges = new ArrayList<>(collect_edges_set_in_X());
+            tree = calc_spanning_tree(edges);
         }else{
             tree = null;
         }
@@ -277,10 +293,18 @@ public class DTPSolver {
         int m_p_t = 1;
         while((System.currentTimeMillis() - start_time)/1000.0 < time_limit){
             int best_X_size = get_best_solution_X_size();
-            try_sizes[0] = best_X_size;
-            for(int i=1, pos=1; i<=SOLVE_OFFSET; i++, pos+=2){
-                try_sizes[pos] = try_sizes[0] - i;
-                try_sizes[pos+1] = try_sizes[0] + i;
+            if(best_X_size != -1) {
+                try_sizes[0] = best_X_size;
+                for (int i = 1, pos = 1; i <= SOLVE_OFFSET; i++, pos += 2) {
+                    try_sizes[pos] = try_sizes[0] - i;
+                    try_sizes[pos + 1] = try_sizes[0] + i;
+                }
+            }else{
+                try_sizes[0] = X.size();
+                try_sizes[1] = X.size()-1;
+                try_sizes[2] = X.size()-2;
+                try_sizes[3] = X.size()-3;
+                try_sizes[4] = X.size()-4;
             }
             //for(int X_size=best_X_size + SOLVE_OFFSET; X_size>=best_X_size-SOLVE_OFFSET; --X_size) {
             for(int i = 0; i<try_sizes.length; ++i){
@@ -403,6 +427,27 @@ public class DTPSolver {
         return edges;
     }
 
+    private ArrayList<Edge> collect_edges_in_X_after_move_Arr(Vertex addInV, Vertex moveOutV){
+        var edges = new ArrayList<Edge>();
+        for (Vertex v : X){
+            if (v == moveOutV)continue;
+            for (Edge e : graph.edge_list[v.index]){
+                Vertex u = e.getOtherEdgeEnd(v);
+                if(u.is_in_X && u != moveOutV && u.index < v.index){
+                    edges.add(e);
+                }
+            }
+        }
+        for(Edge e : graph.edge_list[addInV.index]){
+            Vertex u = e.getOtherEdgeEnd(addInV);
+            if(u.is_in_X && u != moveOutV){
+                edges.add(e);
+            }
+        }
+
+        return edges;
+    }
+
     private ArrayList<Vertex> get_reduced_candidate_insert_v(){
         var candidates = new ArrayList<Vertex>();
 
@@ -508,115 +553,107 @@ public class DTPSolver {
         SpanningTree new_tree = null;
 
         if(is_calc_tree && X_minu.size() + delta == 0){
-            if(tree == null){
-                new_tree = calc_spanning_tree(collect_edges_in_X_after_move(addInV, moveOutV));
-            }else {
-                //TODO:check if update improves
-//                new_tree = update_current_tree(addInV, moveOutV);
-                new_tree = calc_spanning_tree(collect_edges_in_X_after_move(addInV, moveOutV));
-//
-//                var test_tree = update_current_tree(addInV, moveOutV);
-//                if(Math.abs(new_tree.tree_weight - test_tree.tree_weight)> 0.001){
-//                    throw new Error("update calc spanning tree error");
-//                }
-            }
+            var candidate_edges = collect_edges_in_X_after_move_Arr(addInV, moveOutV);
+            new_tree = calc_spanning_tree(candidate_edges);
+
         }
+
 
         return new Move(addInV, moveOutV, delta, new_tree);
     }
 
-    private SpanningTree update_current_tree(Vertex addInV, Vertex moveOutV){
-        Graph g_tree = graph.gen_new_subgraph_from_tree(tree);
+//    private SpanningTree update_current_tree(Vertex addInV, Vertex moveOutV){
+//        Graph g_tree = graph.gen_new_subgraph_from_tree(tree);
+//
+//        update_calc_tree_add_v(X.size() + 1, g_tree, addInV);
+//        return update_calc_tree_remove_v(X.size(), g_tree, addInV, moveOutV);
+//    }
 
-        update_calc_tree_add_v(X.size() + 1, g_tree, addInV);
-        return update_calc_tree_remove_v(X.size(), g_tree, addInV, moveOutV);
-    }
+//    private SpanningTree update_calc_tree_remove_v(int x_size, Graph g_tree, Vertex addInV,Vertex moveOutV){
+//
+//        for(var e: graph.edge_list[moveOutV.index]){
+//            var other_v = e.getOtherEdgeEnd(moveOutV);
+//            if(other_v.is_in_X || other_v == addInV){
+//                g_tree.remove_edge(e);
+//            }
+//        }
+//        var curr_tree_edges = g_tree.get_all_edges_des();
+//        var candidate_edges = collect_edges_in_X_after_move(addInV, moveOutV);
+//        candidate_edges.removeAll(curr_tree_edges);
+//
+//        return update_kruskal(g_tree, curr_tree_edges, candidate_edges);
+//    }
 
-    private SpanningTree update_calc_tree_remove_v(int x_size, Graph g_tree, Vertex addInV,Vertex moveOutV){
+//    private SpanningTree update_kruskal(Graph g_tree, Set<Edge> curr_tree_edges, Set<Edge> candidate_edges){
+//        int[] disjoint_set = new int[graph.vertices.length];
+//        Arrays.fill(disjoint_set, -1);
+//        prepare_disjoint_set(g_tree, disjoint_set);
+//        kruskal_subprocess(new ArrayList<Edge>(candidate_edges), disjoint_set, curr_tree_edges);
+//
+//        var tree_weight = 0.0;
+//        for(Edge e : curr_tree_edges){
+//            tree_weight += e.weight;
+//        }
+//        return new SpanningTree(curr_tree_edges, tree_weight);
+//    }
 
-        for(var e: graph.edge_list[moveOutV.index]){
-            var other_v = e.getOtherEdgeEnd(moveOutV);
-            if(other_v.is_in_X || other_v == addInV){
-                g_tree.remove_edge(e);
-            }
-        }
-        var curr_tree_edges = g_tree.get_all_edges_des();
-        var candidate_edges = collect_edges_in_X_after_move(addInV, moveOutV);
-        candidate_edges.removeAll(curr_tree_edges);
+//    private void prepare_disjoint_set(Graph g_tree, int[] disjoint_set){
+//        boolean[] visited = new boolean[graph.vertices.length];
+//        for(Vertex v : X){
+//            if(visited[v.index])continue;
+//            visited[v.index] = true;
+//            dfs_prepare_disjoint_set(g_tree, v, disjoint_set, visited);
+//        }
+//    }
 
-        return update_kruskal(g_tree, curr_tree_edges, candidate_edges);
-    }
+//    private int dfs_prepare_disjoint_set(Graph g_tree, Vertex root, int[] disjoint_set, boolean[] visited){
+//        int vertices_count = 1;
+//        for(Edge e : g_tree.edge_list[root.index]){
+//            Vertex u = e.getOtherEdgeEnd(root);
+//            if(visited[u.index])continue;
+//            visited[u.index] = true;
+//            disjoint_set[u.index] = root.index;
+//            vertices_count += dfs_prepare_disjoint_set(g_tree, u, disjoint_set, visited);
+//        }
+//        if(disjoint_set[root.index] == -1){
+//            disjoint_set[root.index] = -vertices_count;
+//        }
+//        return vertices_count;
+//    }
+//
+//    private void update_calc_tree_add_v(int x_size, Graph g_tree, Vertex addInV){
+//        for(var e : graph.edge_list[addInV.index]){
+//            var other_v = e.getOtherEdgeEnd(addInV);
+//            if(other_v.is_in_X) {
+//                g_tree.add_edge(e);
+//            }
+//        }
+//        var edges = g_tree.get_all_edges_des();
+//        int curr_edges_count = edges.size();
+//
+//        boolean[] visited = new boolean[graph.vertices.length];
+//        for(Edge e : edges){
+//            Arrays.fill(visited, false);
+//            int count = DFS_subgraph_count(g_tree, e.source, e, visited);
+//            if(count != x_size) continue;
+//            g_tree.remove_edge(e);
+//            curr_edges_count--;
+//            if(curr_edges_count == x_size - 1)break;
+//        }
+//    }
 
-    private SpanningTree update_kruskal(Graph g_tree, Set<Edge> curr_tree_edges, Set<Edge> candidate_edges){
-        int[] disjoint_set = new int[graph.vertices.length];
-        Arrays.fill(disjoint_set, -1);
-        prepare_disjoint_set(g_tree, disjoint_set);
-        kruskal_subprocess(candidate_edges, disjoint_set, curr_tree_edges);
-
-        var tree_weight = 0.0;
-        for(Edge e : curr_tree_edges){
-            tree_weight += e.weight;
-        }
-        return new SpanningTree(curr_tree_edges, tree_weight);
-    }
-
-    private void prepare_disjoint_set(Graph g_tree, int[] disjoint_set){
-        boolean[] visited = new boolean[graph.vertices.length];
-        for(Vertex v : X){
-            if(visited[v.index])continue;
-            visited[v.index] = true;
-            dfs_prepare_disjoint_set(g_tree, v, disjoint_set, visited);
-        }
-    }
-
-    private int dfs_prepare_disjoint_set(Graph g_tree, Vertex root, int[] disjoint_set, boolean[] visited){
-        int vertices_count = 1;
-        for(Edge e : g_tree.edge_list[root.index]){
-            Vertex u = e.getOtherEdgeEnd(root);
-            if(visited[u.index])continue;
-            visited[u.index] = true;
-            disjoint_set[u.index] = root.index;
-            vertices_count += dfs_prepare_disjoint_set(g_tree, u, disjoint_set, visited);
-        }
-        if(disjoint_set[root.index] == -1){
-            disjoint_set[root.index] = -vertices_count;
-        }
-        return vertices_count;
-    }
-
-    private void update_calc_tree_add_v(int x_size, Graph g_tree, Vertex addInV){
-        for(var e : graph.edge_list[addInV.index]){
-            var other_v = e.getOtherEdgeEnd(addInV);
-            if(other_v.is_in_X) {
-                g_tree.add_edge(e);
-            }
-        }
-        var edges = g_tree.get_all_edges_des();
-        int curr_edges_count = edges.size();
-
-        boolean[] visited = new boolean[graph.vertices.length];
-        for(Edge e : edges){
-            Arrays.fill(visited, false);
-            int count = DFS_subgraph_count(g_tree, e.source, e, visited);
-            if(count != x_size) continue;
-            g_tree.remove_edge(e);
-            curr_edges_count--;
-            if(curr_edges_count == x_size - 1)break;
-        }
-    }
-
-    private int DFS_subgraph_count(Graph subgraph, Vertex start, Edge except_e, boolean[] visited){
-        int count = 0;
-        for(Edge e : subgraph.edge_list[start.index]){
-            if(e == except_e) continue;
-            Vertex r = e.getOtherEdgeEnd(start);
-            if(visited[r.index]) continue;
-            visited[r.index] = true;
-            count ++;
-            count += DFS_subgraph_count(subgraph, r, except_e, visited);
-        }
-        return count;
-    }
+//    private int DFS_subgraph_count(Graph subgraph, Vertex start, Edge except_e, boolean[] visited){
+//        int count = 0;
+//        for(Edge e : subgraph.edge_list[start.index]){
+//            if(e == except_e) continue;
+//            Vertex r = e.getOtherEdgeEnd(start);
+//            if(visited[r.index]) continue;
+//            visited[r.index] = true;
+//            count ++;
+//            count += DFS_subgraph_count(subgraph, r, except_e, visited);
+//        }
+//        return count;
+//    }
 
     private void make_move(Move mv){
         add_vertex_to_X(mv.addInV);
@@ -628,7 +665,7 @@ public class DTPSolver {
     private int current_configuration_compare_sol(Solution sol){
         if(sol == null) return -1;
         int cmp = Integer.compare(X_minu.size(), sol.not_dominated_count);
-        if(cmp == 0 && tree != null && sol.tree != null){
+        if(cmp == 0 && X_minu.size() == 0){
             cmp = Double.compare(tree.tree_weight, sol.tree.tree_weight);
         }
         return cmp;
@@ -650,7 +687,7 @@ public class DTPSolver {
             return false;
         }
 
-        tree = calc_spanning_tree(collect_edges_set_in_X());
+        tree = calc_spanning_tree(new ArrayList<>(collect_edges_set_in_X()));
         currBestSol = new Solution(this);
         return true;
     }
@@ -746,9 +783,10 @@ public class DTPSolver {
         return X_minu.size() == 0;
     }
 
-    private SpanningTree calc_spanning_tree(TreeSet<Edge> candidate_edges) {
+    private SpanningTree calc_spanning_tree(ArrayList<Edge> candidate_edges) {
         int[] disjoint_set = new int[graph.vertices.length];
         Arrays.fill(disjoint_set, -1);
+        Collections.sort(candidate_edges);
 
         var tree_edges = new TreeSet<Edge>();
         var tree_weight = 0.0;
@@ -758,7 +796,7 @@ public class DTPSolver {
         return new SpanningTree(tree_edges, tree_weight);
     }
 
-    private double kruskal_subprocess(Set<Edge> candidate_edges, int[] disjoint_set, Set<Edge> tree_edges){
+    private double kruskal_subprocess(ArrayList<Edge> candidate_edges, int[] disjoint_set, Set<Edge> tree_edges){
         var tree_weight = 0.0;
         for (var edge : candidate_edges) {
             int i = edge.source.index;
