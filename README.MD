@@ -1,5 +1,7 @@
 # A Dominating Tree Problem solver
 
+This is the experiment code for the paper _A Two-level Meta-heuristic Approach for the Minimum Dominating Tree Problem_
+
 Execute using the following command:
 
 ```shell

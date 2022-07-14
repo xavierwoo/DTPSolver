@@ -118,7 +118,25 @@ public class Main {
         }
     }
     public static void main(String[] args) throws IOException {
-	// parameters should be: instance_file  time_limit run_count
+//        //parameters should be: instance_file seed time_limit tabu_tenure_range perturb_trigger_period perturb_strength
+//        //For example instance.txt 1000 0 5-10 100 0.1-0.3
+//        var instance_file = args[0];
+//        var seed = Integer.parseInt(args[1]);
+//        var time_limit = Double.parseDouble(args[2]);
+//        var tt_range = args[3];
+//        var ptp = Integer.parseInt(args[4]);
+//        var ps = args[5];
+//
+//        var solver = new DTPSolver(instance_file, seed);
+//        solver.setTime_limit(time_limit);
+//        solver.set_tabu_tenure(tt_range);
+//        solver.set_MAX_FAIL_COUNT(ptp);
+//        solver.set_perturb_ratio(ps);
+//        var sol = solver.solve();
+//        System.out.println("FINAL BEST OBJ: " + sol.tree.tree_weight);
+//    }
+    /*The following is the old batch run main*/
+	 //parameters should be: instance_file  time_limit run_count
         int run = Integer.parseInt(args[2]);
         var resFile = "resTotal.csv";
         var instance_file = args[0];

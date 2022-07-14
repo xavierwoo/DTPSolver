@@ -1,7 +1,5 @@
 package DTPSolver;
 
-import org.antlr.v4.runtime.tree.Tree;
-
 import java.io.*;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -23,17 +21,33 @@ public class DTPSolver {
     Map<Integer, Set<Solution>> solutionPools = new TreeMap<>();
     Map<Integer, Integer> same_sol_again_count = new TreeMap<>();
     Solution currBestSol;
-    final int TABU_BASE = 10;
-    final int TABU_VAR = 50;
-    final int MAX_FAIL_COUNT = 250;
+    int TABU_BASE = 10;
+    int TABU_VAR = 50;
+    int MAX_FAIL_COUNT = 250;
     final int SOLVE_OFFSET = 2;
-    final double PERTURB_STR_RATIO_MIN = 0.3;
-    final double PERTURB_STR_RATIO_MAX = 0.5;
+    double PERTURB_STR_RATIO_MIN = 0.5;
+    double PERTURB_STR_RATIO_MAX = 0.8;
     final int PERTURB_TIMES_MAX = 5;
     final double CUT_RATIO = 0.05;
 
     public void setTime_limit(double time){
         time_limit = time;
+    }
+
+    public void set_tabu_tenure(String tt){
+        var tt_v = tt.split("-");
+        TABU_BASE = Integer.parseInt(tt_v[0]);
+        TABU_VAR = Integer.parseInt(tt_v[1]);
+    }
+
+    public void set_MAX_FAIL_COUNT(int count){
+        MAX_FAIL_COUNT = count;
+    }
+
+    public void set_perturb_ratio(String pr){
+        var pt_v = pr.split("-");
+        PERTURB_STR_RATIO_MIN = Double.parseDouble(pt_v[0]);
+        PERTURB_STR_RATIO_MAX = Double.parseDouble(pt_v[1]);
     }
 
     public DTPSolver(String instance, int seed) throws IOException {
@@ -285,10 +299,21 @@ public class DTPSolver {
         }
     }
 
-    public Solution solve() {
+    private void writeSampleRes() throws IOException {
+        BufferedWriter bf = new BufferedWriter(new FileWriter("sampleRes.txt"));
+        for(var entry : solutionPools.entrySet()){
+            int v_num = entry.getKey();
+            var sol = entry.getValue().iterator().next();
+            bf.write(v_num + "\t" + sol.tree.tree_weight + "\n");
+        }
+        bf.close();
+    }
+
+    public Solution solve() throws IOException {
         int[] try_sizes = new int[SOLVE_OFFSET * 2 + 1];
         init();
         sampling();
+        //writeSampleRes();
         Solution bestSol;
         int m_p_t = 1;
         while((System.currentTimeMillis() - start_time)/1000.0 < time_limit){
